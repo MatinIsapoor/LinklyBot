@@ -9,16 +9,12 @@ Starts two things concurrently:
 
        GET /{short_code} -> 302 -> original_url (+1 click)
        GET /              -> health page
-       GET /healthz       -> bare uptime/keep-alive probe
+       GET /healthz       -> bare health probe
        POST /telegram/webhook -> aiogram update feed (webhook mode)
 
 The bot uses **polling** by default (local dev). When ``USE_WEBHOOK=true``
 or a Render environment is detected (``RENDER_EXTERNAL_URL``), it registers
 a webhook with Telegram instead.
-
-On Render the app also self-pings ``/healthz`` every few minutes
-(``KEEP_ALIVE``), because a free web service spins down after 15 minutes
-without inbound traffic.
 
 Run with::
 
@@ -28,7 +24,6 @@ Run with::
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import hashlib
 import logging
 import os
@@ -40,7 +35,7 @@ from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.types import BotCommand, Update
-from aiohttp import ClientSession, ClientTimeout, web
+from aiohttp import web
 
 from bot import build_dispatcher
 from config import config
@@ -227,25 +222,6 @@ async def wait_for_shutdown() -> None:
     await stop.wait()
 
 
-async def keep_alive(url: str, interval: int) -> None:
-    """
-    Poll our own public ``/healthz`` so Render never sees 15 idle minutes.
-
-    Render's free plan spins a web service down after 15 minutes without
-    inbound traffic (outbound requests and polling do not count). A request
-    through the public URL does, so this keeps the service - and the bot -
-    awake around the clock.
-    """
-    timeout = ClientTimeout(total=30)
-    async with ClientSession(timeout=timeout) as session:
-        while True:
-            await asyncio.sleep(interval)
-            try:
-                async with session.get(url) as response:
-                    logger.debug("Keep-alive ping %s -> %s", url, response.status)
-            except Exception as exc:
-                logger.warning("Keep-alive ping failed (%s): %s", url, exc)
-
 
 async def setup_bot_commands(bot: Bot) -> None:
     """Register the user-visible command list (best-effort)."""
@@ -319,24 +295,6 @@ async def main() -> None:
         logger.warning("Could not start redirect server (%s). Bot continues.", exc)
         runner = None  # type: ignore[assignment]
 
-    # -- keep-alive (Render free plan) --------------------------------
-    keep_alive_task: asyncio.Task[None] | None = None
-    if config.KEEP_ALIVE:
-        if runner is None or config.BASE_URL == "https://example.com":
-            logger.warning(
-                "KEEP_ALIVE is enabled but no public URL/server is available; "
-                "skipping self-pings."
-            )
-        else:
-            keep_alive_url = f"{config.BASE_URL}/healthz"
-            keep_alive_task = asyncio.create_task(
-                keep_alive(keep_alive_url, config.KEEP_ALIVE_INTERVAL)
-            )
-            logger.info(
-                "Keep-alive enabled: pinging %s every %ss",
-                keep_alive_url,
-                config.KEEP_ALIVE_INTERVAL,
-            )
 
     try:
         if config.USE_WEBHOOK:
@@ -349,10 +307,6 @@ async def main() -> None:
             await bot.delete_webhook(drop_pending_updates=True)
             await dp.start_polling(bot)
     finally:
-        if keep_alive_task is not None:
-            keep_alive_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await keep_alive_task
         if runner is not None:
             await runner.cleanup()
         await db.close()
