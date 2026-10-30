@@ -127,19 +127,6 @@ class Config:
         or "/telegram/webhook"
     )
 
-    # --- Keep-alive (Render free plan spins down after 15 idle minutes) ---
-    # Enabled automatically on Render; the app pings its own /healthz URL
-    # every KEEP_ALIVE_INTERVAL seconds so inbound traffic never stops.
-    KEEP_ALIVE: bool = field(
-        default_factory=lambda: _get_bool_env(
-            "KEEP_ALIVE", bool(os.getenv("RENDER_EXTERNAL_URL", "").strip())
-        )
-    )
-    KEEP_ALIVE_INTERVAL: int = field(
-        default_factory=lambda: max(
-            60, min(840, _get_int_env("KEEP_ALIVE_INTERVAL", 600))
-        )
-    )
 
     @property
     def sync_database_url(self) -> str:
